@@ -1,0 +1,36 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.venv/
+venv/
+
+# Node
+frontend/node_modules/
+frontend/dist/
+
+# Build output
+build/
+dist/
+*.spec
+
+# Runtime data
+temp_intake/
+data/
+logs/
+ocr_cache/
+sessions/
+resume_reports/
+test_output/
+Output/
+*.db
+settings.json
+rules.json
+
+# Runtime output
+Custom_Output/
+
+# Misc
+.DS_Store
+Thumbs.db
