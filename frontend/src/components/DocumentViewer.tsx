@@ -50,13 +50,16 @@ export const DocumentViewer: React.FC<DocumentViewerProps> = ({
   const [activePane, setActivePane] = useState<'gemini' | 'metadata'>('gemini');
 
   // Metadata form state
-  const [selectedType, setSelectedType] = useState(file.doc_type === 'Unsorted' ? "Driver's License" : file.doc_type);
+  const [selectedType, setSelectedType] = useState(
+    rules.some((r) => r.name === file.doc_type) ? file.doc_type : (rules[0]?.name || '')
+  );
   const [isCustomType, setIsCustomType] = useState(false);
   const [customTypeInput, setCustomTypeInput] = useState('');
   const [ownerInput, setOwnerInput] = useState(file.owner === 'General' ? '' : file.owner);
   const [categoryInput, setCategoryInput] = useState('Identification');
   const [refNumberInput, setRefNumberInput] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [isAnalyzing, setIsAnalyzing] = useState(false);
 
   // Gemini AI Chat state
   const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
@@ -92,7 +95,7 @@ export const DocumentViewer: React.FC<DocumentViewerProps> = ({
     } catch (err: any) {
       setChatMessages([
         ...newMessages,
-        { sender: 'gemini', text: `Gemini Error: ${err.message || 'Failed to connect. Please make sure your Gemini API key is configured in Settings.'}` },
+        { sender: 'gemini', text: `Lumeed AI Error: ${err.message || 'Failed to connect. Please make sure your AI API key is configured in Settings.'}` },
       ]);
     } finally {
       setIsSendingChat(false);
@@ -120,6 +123,19 @@ export const DocumentViewer: React.FC<DocumentViewerProps> = ({
     }
   };
 
+  const handleAnalyze = async () => {
+    try {
+      setIsAnalyzing(true);
+      const res = await api.analyzeFile(jobId, file.original_path);
+      if (res.file) onReclassified(res.file);
+      onClose();
+    } catch (err: any) {
+      alert(err.message || 'AI analysis failed');
+    } finally {
+      setIsAnalyzing(false);
+    }
+  };
+
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4 sm:p-6 animate-in fade-in duration-200">
       <div className="flex flex-col h-[92vh] w-full max-w-6xl rounded-2xl border border-slate-300 dark:border-slate-800 bg-white dark:bg-slate-900 shadow-2xl overflow-hidden">
@@ -141,6 +157,18 @@ export const DocumentViewer: React.FC<DocumentViewerProps> = ({
           </div>
 
           <div className="flex items-center gap-2">
+            <button
+              onClick={handleAnalyze}
+              disabled={isAnalyzing}
+              className="inline-flex items-center gap-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white px-3 py-1.5 text-xs font-semibold shadow-xs transition disabled:opacity-50"
+            >
+              {isAnalyzing ? (
+                <div className="h-3.5 w-3.5 animate-spin rounded-full border-2 border-white border-t-transparent" />
+              ) : (
+                <Sparkles className="h-3.5 w-3.5" />
+              )}
+              <span>Analyze & Auto-sort</span>
+            </button>
             <button
               onClick={() => window.open(previewUrl, '_blank')}
               className="inline-flex items-center gap-1 rounded-lg px-2.5 py-1.5 text-xs text-slate-600 dark:text-slate-400 hover:bg-slate-200 dark:hover:bg-slate-800 transition"
@@ -234,7 +262,7 @@ export const DocumentViewer: React.FC<DocumentViewerProps> = ({
                 }`}
               >
                 <Sparkles className="h-3.5 w-3.5 text-indigo-500" />
-                <span>Ask Google Gemini</span>
+                <span>Ask Lumeed AI</span>
               </button>
 
               <button
@@ -263,10 +291,10 @@ export const DocumentViewer: React.FC<DocumentViewerProps> = ({
                       </div>
                       <div>
                         <p className="text-xs font-bold text-slate-800 dark:text-slate-200">
-                          Ask Gemini anything about this document!
+                          Ask Lumeed AI anything about this document!
                         </p>
                         <p className="text-[11px] text-slate-400 mt-0.5">
-                          Gemini Vision reads the full document image or PDF directly.
+                          Lumeed AI reads the full document image or PDF directly.
                         </p>
                       </div>
 
@@ -358,7 +386,7 @@ export const DocumentViewer: React.FC<DocumentViewerProps> = ({
                   >
                     <input
                       type="text"
-                      placeholder="Ask Gemini about details in this document..."
+                      placeholder="Ask Lumeed AI about details in this document..."
                       value={chatInput}
                       onChange={(e) => setChatInput(e.target.value)}
                       ref={chatInputRef}
@@ -386,7 +414,11 @@ export const DocumentViewer: React.FC<DocumentViewerProps> = ({
                       <span className="text-slate-500 dark:text-slate-400 uppercase tracking-wider font-semibold">
                         Classification Status
                       </span>
-                      {file.is_unsorted ? (
+                      {file.status === 'queued' || file.status === 'processing' ? (
+                        <span className="inline-flex items-center gap-1 rounded-full bg-indigo-500/10 px-2 py-0.5 text-xs font-medium text-indigo-600 dark:text-indigo-400 ring-1 ring-indigo-500/20">
+                          <Sparkles className="h-3 w-3" /> Background OCR/AI
+                        </span>
+                      ) : file.is_unsorted ? (
                         <span className="inline-flex items-center gap-1 rounded-full bg-amber-500/10 px-2 py-0.5 text-xs font-medium text-amber-600 dark:text-amber-400 ring-1 ring-amber-500/20">
                           <AlertTriangle className="h-3 w-3" /> Unsorted
                         </span>
@@ -514,6 +546,12 @@ export const DocumentViewer: React.FC<DocumentViewerProps> = ({
                   </div>
 
                 </div>
+
+                {(file.status === 'queued' || file.status === 'processing') && (
+                  <div className="px-4 pt-3 text-[11px] text-indigo-600 dark:text-indigo-400">
+                    Saving now stops this file's background OCR/AI processing and routes it immediately.
+                  </div>
+                )}
 
                 {/* Bottom Actions for Metadata re-sort */}
                 <div className="p-4 border-t border-slate-200 dark:border-slate-800 flex gap-2 bg-slate-50/50 dark:bg-slate-950/40">

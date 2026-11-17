@@ -48,12 +48,17 @@ def route_file(
     folder_name = sanitize_path_component(target_folder or doc_type)
 
     if is_unsorted or doc_type.lower() == "unsorted":
-        target_dir = destination_root / "Unsorted" / clean_owner
+        target_dir = destination_root / "Unsorted"
+        if clean_owner.lower() != "general":
+            target_dir = target_dir / clean_owner
     else:
         # Build relative folder using template
         rel_path_str = template.replace("{owner}", clean_owner).replace("{doc_type}", folder_name)
+        if clean_owner.lower() == "general":
+            rel_path_str = rel_path_str.replace(clean_owner, "")
         # Clean relative path parts
-        parts = [sanitize_path_component(p) for p in Path(rel_path_str).parts if p.strip()]
+        raw = [p for p in Path(rel_path_str).parts if p.strip("\\/")]
+        parts = [sanitize_path_component(p) for p in raw]
         target_dir = destination_root.joinpath(*parts)
 
     target_dir.mkdir(parents=True, exist_ok=True)

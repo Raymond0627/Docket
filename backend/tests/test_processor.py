@@ -31,7 +31,7 @@ def test_job_processor_run(temp_env):
     customer_dir = src_dir / "Raymond Gudito"
     customer_dir.mkdir()
 
-    # File 1: Digital PDF (Driver License)
+    # File 1: PDF (always OCR'd, even with an embedded text layer)
     dl_pdf = customer_dir / "license.pdf"
     doc = fitz.open()
     page = doc.new_page()

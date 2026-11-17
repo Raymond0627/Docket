@@ -11,6 +11,7 @@ from typing import Callable, Dict, Iterator, List, Optional
 
 from backend.database import DatabaseManager
 from backend.models import JobStatus
+from backend.engine.control import clear_job_control
 
 logger = logging.getLogger(__name__)
 
@@ -138,6 +139,7 @@ class JobManager:
                 logger.exception("Could not mark job %s as failed", job_id)
             self._append(run, {"event": "job_error", "job_id": job_id, "error": str(exc)})
         finally:
+            clear_job_control(job_id)
             with run.cond:
                 run.finished = True
                 run.cond.notify_all()

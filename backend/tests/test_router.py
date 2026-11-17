@@ -105,3 +105,15 @@ def test_route_file_move():
 
         assert dest.exists()
         assert not src_path.exists()  # Source is deleted with move
+
+def test_route_file_general_owner_has_no_general_folder():
+    with tempfile.TemporaryDirectory() as src_dir, tempfile.TemporaryDirectory() as dest_dir:
+        src_path = Path(src_dir) / "mystery.pdf"
+        src_path.write_text("content")
+        dest = route_file(
+            source_file=src_path, destination_root=Path(dest_dir),
+            owner="General", doc_type="Invoice", target_folder="Invoice",
+            template="{owner}/", is_unsorted=False, mode="copy",
+        )
+        assert dest.parent == Path(dest_dir)
+        assert "General" not in str(dest)

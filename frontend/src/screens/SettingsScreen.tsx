@@ -15,7 +15,8 @@ import {
   Sparkles,
   Key,
   Eye,
-  EyeOff
+  EyeOff,
+  Users
 } from 'lucide-react';
 
 export const SettingsScreen: React.FC = () => {
@@ -260,14 +261,14 @@ export const SettingsScreen: React.FC = () => {
             <div className="flex flex-wrap gap-2 mb-2">
               <button
                 type="button"
-                onClick={() => setSettings({ ...settings, folder_template: '{owner}/{doc_type}/' })}
+                onClick={() => setSettings({ ...settings, folder_template: '{owner}/' })}
                 className={`rounded-lg px-2.5 py-1 text-xs font-medium border transition ${
-                  settings.folder_template === '{owner}/{doc_type}/'
+                  settings.folder_template === '{owner}/'
                     ? 'border-brand-500 bg-brand-50 dark:bg-brand-500/20 text-brand-700 dark:text-brand-300'
                     : 'border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'
                 }`}
               >
-                1. Sort by User / Owner ({'{owner}/{doc_type}'})
+                1. Sort by User / Owner ({'{owner}'})
               </button>
               <button
                 type="button"
@@ -396,6 +397,89 @@ export const SettingsScreen: React.FC = () => {
               <option value="gemini-3.8-flash">gemini-3.8-flash</option>
             </select>
           </div>
+        </div>
+
+        <label className="flex items-start gap-2.5 rounded-xl border border-indigo-500/20 bg-white/60 dark:bg-slate-900/40 p-3 cursor-pointer">
+          <input
+            type="checkbox"
+            checked={settings.ai_fallback_enabled ?? true}
+            onChange={(e) => setSettings({ ...settings, ai_fallback_enabled: e.target.checked })}
+            className="mt-0.5 h-4 w-4 accent-indigo-500"
+          />
+          <span className="text-xs">
+            <span className="font-semibold text-slate-800 dark:text-slate-200">
+              Use Gemini as the AI fallback (layer 3)
+            </span>
+            <span className="block text-slate-500 dark:text-slate-400 mt-0.5">
+              Files still unsorted after background OCR are sent to Gemini for one final classification attempt. Requires an API key; costs one request per remaining file.
+            </span>
+          </span>
+        </label>
+      </div>
+
+      {/* Validated Customers Roster */}
+      <div className="rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900/60 p-6 space-y-4 shadow-sm">
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-2 text-slate-900 dark:text-white font-semibold text-sm">
+            <Users className="h-4 w-4 text-brand-500" />
+            <span>Validated Customers (Owner Roster)</span>
+          </div>
+          <button
+            type="button"
+            onClick={() =>
+              setSettings({
+                ...settings,
+                validated_customers: [...(settings.validated_customers || []), { name: '', aliases: [] }],
+              })
+            }
+            className="inline-flex items-center gap-1.5 rounded-xl border border-brand-500/30 bg-brand-500/10 hover:bg-brand-500/20 text-brand-600 dark:text-brand-400 px-3 py-1.5 text-xs font-medium transition"
+          >
+            <Plus className="h-3.5 w-3.5" /> Add Customer
+          </button>
+        </div>
+        <p className="text-[11px] text-slate-500 dark:text-slate-400">
+          Only names in this roster become owner folders. Unknown or OCR-garbled names are resolved to a validated customer via aliases, or become <span className="font-mono">General</span> (no subfolder).
+        </p>
+        <div className="space-y-2">
+          {(settings.validated_customers || []).map((vc, idx) => (
+            <div key={idx} className="grid grid-cols-1 md:grid-cols-3 gap-2 items-center">
+              <input
+                type="text"
+                placeholder="Customer name"
+                value={vc.name}
+                onChange={(e) => {
+                  const next = [...(settings.validated_customers || [])];
+                  next[idx] = { ...next[idx], name: e.target.value };
+                  setSettings({ ...settings, validated_customers: next });
+                }}
+                className="rounded-xl border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 px-3 py-2 text-xs text-slate-900 dark:text-white focus:border-brand-500 focus:outline-none"
+              />
+              <input
+                type="text"
+                placeholder="Aliases (comma separated)"
+                value={(vc.aliases || []).join(', ')}
+                onChange={(e) => {
+                  const next = [...(settings.validated_customers || [])];
+                  next[idx] = {
+                    ...next[idx],
+                    aliases: e.target.value.split(',').map((a) => a.trim()).filter(Boolean),
+                  };
+                  setSettings({ ...settings, validated_customers: next });
+                }}
+                className="md:col-span-1 rounded-xl border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 px-3 py-2 text-xs text-slate-900 dark:text-white focus:border-brand-500 focus:outline-none"
+              />
+              <button
+                type="button"
+                onClick={() => {
+                  const next = (settings.validated_customers || []).filter((_, i) => i !== idx);
+                  setSettings({ ...settings, validated_customers: next });
+                }}
+                className="justify-self-start md:justify-self-end rounded-lg border border-rose-500/30 bg-rose-500/10 hover:bg-rose-500/20 text-rose-600 dark:text-rose-400 px-3 py-2 text-xs font-medium transition"
+              >
+                Remove
+              </button>
+            </div>
+          ))}
         </div>
       </div>
 

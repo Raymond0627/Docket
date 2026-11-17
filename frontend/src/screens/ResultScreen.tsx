@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { Job, DirectoryNode, FileClassification, RuleDefinition } from '../types';
 import { api } from '../services/api';
 import { TreeView } from '../components/TreeView';
@@ -33,18 +33,70 @@ export const ResultScreen: React.FC<ResultScreenProps> = ({ job, onReset }) => {
   const [files, setFiles] = useState<FileClassification[]>([]);
   const [rules, setRules] = useState<RuleDefinition[]>([]);
   const [activeTab, setActiveTab] = useState<'files' | 'tree'>('files');
-  const [filterMode, setFilterMode] = useState<'all' | 'unsorted' | 'sorted'>('all');
+  const [filterMode, setFilterMode] = useState<'all' | 'processing' | 'unsorted' | 'sorted'>('all');
   const [sortField, setSortField] = useState<'owner' | 'doc_type'>('owner');
   const [hierarchyMode, setHierarchyMode] = useState<'by_owner' | 'by_doc_type' | 'by_category' | 'raw_disk'>('by_owner');
   const [selectedFileForViewer, setSelectedFileForViewer] = useState<FileClassification | null>(null);
   const [isECMSOpen, setIsECMSOpen] = useState(false);
   const [openingFolder, setOpeningFolder] = useState(false);
   const [reorganizingDisk, setReorganizingDisk] = useState(false);
+  const lastTreeRefreshRef = useRef(0);
 
   useEffect(() => {
     setCurrentJob(job);
     refreshData();
     api.getRules().then(setRules).catch(console.error);
+
+    const cleanup = api.subscribeJobStream(
+      job.id,
+      (event) => {
+        if (event.event === 'file_processed' || event.event === 'file_updated') {
+          setFiles((prev) => {
+            const idx = prev.findIndex((f) => f.original_path === event.file.original_path);
+            if (idx === -1) return [...prev, event.file];
+            const next = [...prev];
+            next[idx] = event.file;
+            return next;
+          });
+          setCurrentJob((prev) => ({
+            ...prev,
+            sorted_files: event.sorted_files ?? prev.sorted_files,
+            unsorted_files: event.unsorted_files ?? prev.unsorted_files,
+            queued_files: event.queued_files ?? prev.queued_files,
+          }));
+          if (
+            event.event === 'file_updated' &&
+            event.file.status === 'sorted' &&
+            Date.now() - lastTreeRefreshRef.current > 2000
+          ) {
+            lastTreeRefreshRef.current = Date.now();
+            api.getJobTree(job.id).then(setTreeData).catch(console.error);
+          }
+        } else if (event.event === 'fast_pass_completed') {
+          setCurrentJob((prev) => ({
+            ...prev,
+            sorted_files: event.sorted_files,
+            unsorted_files: event.unsorted_files,
+            queued_files: event.queued_files,
+          }));
+        } else if (event.event === 'job_completed') {
+          setCurrentJob((prev) => ({
+            ...prev,
+            status: 'completed',
+            total_files: event.total_files,
+            sorted_files: event.sorted_files,
+            unsorted_files: event.unsorted_files,
+            queued_files: 0,
+            duration_seconds: event.duration_seconds,
+          }));
+          api.getJob(job.id).then(setCurrentJob).catch(console.error);
+          api.getJobTree(job.id).then(setTreeData).catch(console.error);
+        }
+      },
+      (err) => console.error('Result stream error:', err)
+    );
+
+    return cleanup;
   }, [job.id]);
 
   const refreshData = () => {
@@ -71,16 +123,12 @@ export const ResultScreen: React.FC<ResultScreenProps> = ({ job, onReset }) => {
     setFiles((prev) =>
       prev.map((f) => (f.original_path === updatedFile.original_path ? updatedFile : f))
     );
-    setCurrentJob((prev) => ({
-      ...prev,
-      sorted_files: prev.sorted_files + 1,
-      unsorted_files: Math.max(0, prev.unsorted_files - 1),
-    }));
+    api.getJob(currentJob.id).then(setCurrentJob).catch(console.error);
     api.getJobTree(currentJob.id).then(setTreeData).catch(console.error);
   };
 
   const handleApplyHierarchyToDisk = async () => {
-    let template = '{owner}/{doc_type}/';
+    let template = '{owner}/';
     if (hierarchyMode === 'by_doc_type') template = '{doc_type}/{owner}/';
     else if (hierarchyMode === 'by_category') template = '{category}/{doc_type}/{owner}/';
 
@@ -100,14 +148,18 @@ export const ResultScreen: React.FC<ResultScreenProps> = ({ job, onReset }) => {
     }
   };
 
-  const total = currentJob.sorted_files + currentJob.unsorted_files;
-  const sortRate = total > 0 ? Math.round((currentJob.sorted_files / total) * 100) : 0;
+  const sortedCount = files.filter((f) => f.status === 'sorted').length;
   const unsortedCount = files.filter((f) => f.is_unsorted).length;
+  const processingCount = files.filter((f) => f.status === 'queued' || f.status === 'processing').length;
+  const total = files.length || currentJob.total_files;
+  const sortRate = total > 0 ? Math.round((sortedCount / total) * 100) : 0;
+  const backgroundRunning = processingCount > 0 || currentJob.status === 'processing';
 
   const filteredFiles = files
     .filter((f) => {
+      if (filterMode === 'processing') return f.status === 'queued' || f.status === 'processing';
       if (filterMode === 'unsorted') return f.is_unsorted;
-      if (filterMode === 'sorted') return !f.is_unsorted;
+      if (filterMode === 'sorted') return f.status === 'sorted';
       return true;
     })
     .sort((a, b) => {
@@ -171,6 +223,18 @@ export const ResultScreen: React.FC<ResultScreenProps> = ({ job, onReset }) => {
         </div>
       </div>
 
+      {backgroundRunning && (
+        <div className="flex items-center gap-3 rounded-2xl border border-indigo-500/30 bg-indigo-500/10 px-5 py-4 text-sm text-indigo-700 dark:text-indigo-300">
+          <RefreshCw className="h-5 w-5 animate-spin shrink-0" />
+          <div>
+            <p className="font-semibold">Background OCR & AI fallback running</p>
+            <p className="text-xs opacity-80">
+              {processingCount} file(s) remaining. You can review and edit any file now — saving an edit stops that file's background processing.
+            </p>
+          </div>
+        </div>
+      )}
+
       {/* Hero Metric Cards */}
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
         {/* Sorted */}
@@ -182,7 +246,7 @@ export const ResultScreen: React.FC<ResultScreenProps> = ({ job, onReset }) => {
             <FolderCheck className="h-5 w-5 text-emerald-500" />
           </div>
           <div className="mt-3 flex items-baseline gap-2">
-            <span className="text-3xl font-bold text-slate-900 dark:text-white">{currentJob.sorted_files}</span>
+            <span className="text-3xl font-bold text-slate-900 dark:text-white">{sortedCount}</span>
             <span className="text-sm font-medium text-emerald-600 dark:text-emerald-400">({sortRate}%)</span>
           </div>
           <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">Matched rules & routed to destination</p>
@@ -212,7 +276,7 @@ export const ResultScreen: React.FC<ResultScreenProps> = ({ job, onReset }) => {
             <FolderX className="h-5 w-5 text-amber-500" />
           </div>
           <div className="mt-3 flex items-baseline gap-2">
-            <span className="text-3xl font-bold text-slate-900 dark:text-white">{currentJob.unsorted_files}</span>
+            <span className="text-3xl font-bold text-slate-900 dark:text-white">{unsortedCount}</span>
             <span className="text-sm font-medium text-amber-600 dark:text-amber-400">({100 - sortRate}%)</span>
           </div>
           <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
@@ -333,6 +397,17 @@ export const ResultScreen: React.FC<ResultScreenProps> = ({ job, onReset }) => {
                   All ({files.length})
                 </button>
                 <button
+                  onClick={() => setFilterMode('processing')}
+                  className={`flex items-center gap-1 rounded-lg px-2.5 py-1 font-medium transition ${
+                    filterMode === 'processing'
+                      ? 'bg-indigo-600 text-white shadow-xs'
+                      : 'text-indigo-600 dark:text-indigo-400'
+                  }`}
+                >
+                  <RefreshCw className="h-3 w-3" />
+                  <span>Processing ({processingCount})</span>
+                </button>
+                <button
                   onClick={() => setFilterMode('unsorted')}
                   className={`flex items-center gap-1 rounded-lg px-2.5 py-1 font-medium transition ${
                     filterMode === 'unsorted'
@@ -351,7 +426,7 @@ export const ResultScreen: React.FC<ResultScreenProps> = ({ job, onReset }) => {
                       : 'text-slate-500 dark:text-slate-400'
                   }`}
                 >
-                  Sorted ({files.length - unsortedCount})
+                  Sorted ({sortedCount})
                 </button>
               </div>
 
@@ -424,25 +499,34 @@ export const ResultScreen: React.FC<ResultScreenProps> = ({ job, onReset }) => {
                       </td>
 
                       <td className="py-3 px-4">
-                        {f.is_unsorted ? (
+                        {f.status === 'queued' || f.status === 'processing' ? (
+                          <span className="inline-flex items-center gap-1 rounded-full bg-indigo-500/10 px-2.5 py-0.5 text-[11px] font-semibold text-indigo-600 dark:text-indigo-400 ring-1 ring-indigo-500/20">
+                            <RefreshCw className="h-3 w-3 animate-spin" />
+                            {f.status === 'queued' ? 'Queued for OCR' : `Processing${f.stage === 'ai' ? ' (AI)' : ''}`}
+                          </span>
+                        ) : f.is_unsorted ? (
                           <span className="inline-flex items-center gap-1 rounded-full bg-amber-500/10 px-2.5 py-0.5 text-[11px] font-semibold text-amber-600 dark:text-amber-400 ring-1 ring-amber-500/20">
                             <AlertTriangle className="h-3 w-3" /> Unsorted
                           </span>
                         ) : (
                           <span className="inline-flex items-center gap-1 rounded-full bg-emerald-500/10 px-2.5 py-0.5 text-[11px] font-semibold text-emerald-600 dark:text-emerald-400 ring-1 ring-emerald-500/20">
-                            <CheckCircle2 className="h-3 w-3" /> Sorted
+                            <CheckCircle2 className="h-3 w-3" /> Sorted{f.stage === 'ai' ? ' (AI)' : f.stage === 'manual' ? ' (Manual)' : ''}
                           </span>
                         )}
                       </td>
 
                       <td className="py-3 px-4 text-right" onClick={(e) => e.stopPropagation()}>
                         <div className="flex items-center justify-end gap-1.5">
-                          {f.is_unsorted ? (
+                          {f.is_unsorted || f.status === 'queued' || f.status === 'processing' ? (
                             <button
                               onClick={() => setSelectedFileForViewer(f)}
                               className="inline-flex items-center gap-1 rounded-lg bg-amber-500 hover:bg-amber-600 text-white px-3 py-1 text-xs font-semibold shadow-xs transition"
                             >
-                              <span>Edit Metadata & Re-sort</span>
+                              <span>
+                                {f.status === 'queued' || f.status === 'processing'
+                                  ? 'Review & Override'
+                                  : 'Edit Metadata & Re-sort'}
+                              </span>
                             </button>
                           ) : (
                             <button

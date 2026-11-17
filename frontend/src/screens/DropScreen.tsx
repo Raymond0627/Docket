@@ -11,7 +11,8 @@ import {
   ArrowRight, 
   FolderOpen, 
   RotateCcw,
-  AlertTriangle
+  AlertTriangle,
+  RefreshCw
 } from 'lucide-react';
 
 interface DropScreenProps {
@@ -66,6 +67,21 @@ export const DropScreen: React.FC<DropScreenProps> = ({ onJobCompleted }) => {
           setProcessedCount(event.processed_count);
           setTotalFiles(event.total_files);
           setLiveFiles((prev) => [...prev, event.file]);
+        } else if (event.event === 'file_updated') {
+          setLiveFiles((prev) => {
+            const idx = prev.findIndex((f) => f.original_path === event.file.original_path);
+            if (idx === -1) return [...prev, event.file];
+            const next = [...prev];
+            next[idx] = event.file;
+            return next;
+          });
+        } else if (event.event === 'fast_pass_completed') {
+          // Stay on Organize; the user decides when to open Results.
+          setUploadStatus(null);
+          setIsProcessing(false);
+          setIsDone(true);
+          setTotalFiles(event.total_files);
+          api.getJob(jobId).then(setCompletedJob).catch(console.error);
         } else if (event.event === 'job_completed') {
           setIsProcessing(false);
           setUploadStatus(null);
@@ -178,8 +194,11 @@ export const DropScreen: React.FC<DropScreenProps> = ({ onJobCompleted }) => {
               Organizing Done!
             </h3>
             <p className="text-sm text-slate-600 dark:text-slate-300 max-w-md mx-auto">
-              Processed <span className="font-semibold text-slate-900 dark:text-white">{totalFiles}</span> files in{' '}
+              Fast pass processed <span className="font-semibold text-slate-900 dark:text-white">{totalFiles}</span> files in{' '}
               <span className="font-mono font-semibold">{elapsedSeconds.toFixed(1)}s</span>.
+              {completedJob && completedJob.queued_files > 0 && (
+                <> Scans and images are now being OCR'd in the background — you can review results and edit any file while they finish.</>
+              )}
             </p>
           </div>
 
@@ -195,13 +214,26 @@ export const DropScreen: React.FC<DropScreenProps> = ({ onJobCompleted }) => {
                   {completedJob.unsorted_files} Need Review
                 </span>
               )}
+              {completedJob.queued_files > 0 && (
+                <span className="inline-flex items-center gap-1.5 rounded-full bg-indigo-500/20 text-indigo-700 dark:text-indigo-300 px-3 py-1 font-semibold border border-indigo-500/30">
+                  <RefreshCw className="h-3.5 w-3.5 animate-spin" />
+                  {completedJob.queued_files} Processing in Background
+                </span>
+              )}
             </div>
           )}
 
           {/* Action Buttons to let user go manually */}
           <div className="flex flex-wrap items-center justify-center gap-3 pt-2">
             <button
-              onClick={() => completedJob && onJobCompleted(completedJob)}
+              onClick={async () => {
+                if (!completedJob) return;
+                try {
+                  onJobCompleted(await api.getJob(completedJob.id));
+                } catch {
+                  onJobCompleted(completedJob);
+                }
+              }}
               className="inline-flex items-center gap-2 rounded-xl bg-brand-600 hover:bg-brand-500 text-white px-6 py-3 text-sm font-semibold shadow-lg shadow-brand-500/25 transition transform hover:scale-102"
             >
               <span>View Results & Review Documents</span>

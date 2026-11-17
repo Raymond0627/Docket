@@ -122,6 +122,19 @@ export const api = {
     return res.json();
   },
 
+  async analyzeFile(jobId: string, originalPath: string): Promise<{ success: boolean; file: FileClassification }> {
+    const res = await fetch(`${API_BASE}/jobs/${jobId}/analyze`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ original_path: originalPath }),
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ detail: 'AI analysis failed' }));
+      throw new Error(err.detail || 'AI analysis failed');
+    }
+    return res.json();
+  },
+
   async reorganizeOutput(jobId: string, folderTemplate: string): Promise<{ success: boolean; files: FileClassification[] }> {
     const res = await fetch(`${API_BASE}/jobs/${jobId}/reorganize`, {
       method: 'POST',
@@ -193,7 +206,6 @@ export const api = {
 
   subscribeJobStream(jobId: string, onEvent: (event: LiveJobEvent) => void, onError?: (err: any) => void): () => void {
     const eventSource = new EventSource(`${API_BASE}/jobs/${jobId}/stream`);
-
     eventSource.onmessage = (e) => {
       try {
         const parsed = JSON.parse(e.data) as LiveJobEvent;
@@ -205,13 +217,11 @@ export const api = {
         console.error('Error parsing SSE event:', err);
       }
     };
-
     eventSource.onerror = (err) => {
       console.error('SSE Error:', err);
       if (onError) onError(err);
       eventSource.close();
     };
-
     return () => {
       eventSource.close();
     };

@@ -11,12 +11,19 @@ export interface RuleDefinition {
   enabled: boolean;
 }
 
+export interface ValidatedCustomer {
+  name: string;
+  aliases: string[];
+}
+
 export interface AppSettings {
   output_path: string;
   file_mode: 'copy' | 'move';
   confidence_threshold: number;
   folder_template: string;
   auto_open_explorer: boolean;
+  ai_fallback_enabled?: boolean;
+  validated_customers?: ValidatedCustomer[];
   gemini_api_key?: string;
   gemini_model?: string;
   glenn_api_key?: string;
@@ -41,10 +48,11 @@ export interface FileClassification {
   owner: string;
   confidence: number;
   destination_path: string;
-  status: 'sorted' | 'unsorted' | 'error';
+  status: 'queued' | 'processing' | 'sorted' | 'unsorted' | 'error';
   is_unsorted: boolean;
   error_message?: string;
   matched_keywords: string[];
+  stage?: 'fast' | 'ocr' | 'ai' | 'manual';
 }
 
 export interface Job {
@@ -58,6 +66,7 @@ export interface Job {
   total_files: number;
   sorted_files: number;
   unsorted_files: number;
+  queued_files: number;
   duration_seconds: number;
   created_at: string;
   updated_at: string;
@@ -73,6 +82,8 @@ export interface DirectoryNode {
 
 export type LiveJobEvent =
   | { event: 'job_started'; job_id: string; total_files: number; source_path: string; output_path: string }
-  | { event: 'file_processed'; job_id: string; processed_count: number; total_files: number; file: FileClassification }
+  | { event: 'file_processed'; job_id: string; processed_count: number; total_files: number; sorted_files?: number; unsorted_files?: number; queued_files?: number; file: FileClassification }
+  | { event: 'file_updated'; job_id: string; processed_count?: number; total_files: number; sorted_files: number; unsorted_files: number; queued_files: number; file: FileClassification }
+  | { event: 'fast_pass_completed'; job_id: string; total_files: number; sorted_files: number; unsorted_files: number; queued_files: number; duration_seconds: number }
   | { event: 'job_completed'; job_id: string; total_files: number; sorted_files: number; unsorted_files: number; duration_seconds: number }
   | { event: 'job_error'; job_id: string; error: string };

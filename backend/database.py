@@ -29,6 +29,7 @@ class DatabaseManager:
                     total_files INTEGER NOT NULL DEFAULT 0,
                     sorted_files INTEGER NOT NULL DEFAULT 0,
                     unsorted_files INTEGER NOT NULL DEFAULT 0,
+                    queued_files INTEGER NOT NULL DEFAULT 0,
                     duration_seconds REAL NOT NULL DEFAULT 0.0,
                     created_at TEXT NOT NULL,
                     updated_at TEXT NOT NULL
@@ -47,12 +48,25 @@ class DatabaseManager:
                     is_unsorted INTEGER NOT NULL DEFAULT 0,
                     error_message TEXT,
                     matched_keywords TEXT,
+                    stage TEXT NOT NULL DEFAULT 'fast',
                     created_at TEXT NOT NULL,
                     FOREIGN KEY (job_id) REFERENCES jobs (id) ON DELETE CASCADE
                 );
 
                 CREATE INDEX IF NOT EXISTS idx_job_files_job_id ON job_files (job_id);
             """)
+            # Migration for databases created before the layered pipeline.
+            self._ensure_column(conn, "jobs", "queued_files",
+                                "queued_files INTEGER NOT NULL DEFAULT 0")
+            self._ensure_column(conn, "job_files", "stage",
+                                "stage TEXT NOT NULL DEFAULT 'fast'")
+            conn.commit()
+
+    @staticmethod
+    def _ensure_column(conn: sqlite3.Connection, table: str, column: str, ddl: str) -> None:
+        cols = {row["name"] for row in conn.execute(f"PRAGMA table_info({table})")}
+        if column not in cols:
+            conn.execute(f"ALTER TABLE {table} ADD COLUMN {ddl}")
 
     def create_job(
         self,
@@ -60,7 +74,7 @@ class DatabaseManager:
         output_path: str,
         mode: str = "copy",
         threshold: float = 70.0,
-        template: str = "{owner}/{doc_type}/"
+        template: str = "{owner}/"
     ) -> Job:
         job_id = str(uuid.uuid4())
         now = datetime.now(timezone.utc).isoformat()
@@ -69,13 +83,13 @@ class DatabaseManager:
                 INSERT INTO jobs (
                     id, source_path, output_path, file_mode,
                     confidence_threshold, folder_template, status,
-                    total_files, sorted_files, unsorted_files, duration_seconds,
-                    created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    total_files, sorted_files, unsorted_files, queued_files,
+                    duration_seconds, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, (
                 job_id, source_path, output_path, mode,
                 threshold, template, JobStatus.PENDING.value,
-                0, 0, 0, 0.0, now, now
+                0, 0, 0, 0, 0.0, now, now
             ))
             conn.commit()
         return self.get_job(job_id)
@@ -96,6 +110,7 @@ class DatabaseManager:
                 total_files=row["total_files"],
                 sorted_files=row["sorted_files"],
                 unsorted_files=row["unsorted_files"],
+                queued_files=row["queued_files"],
                 duration_seconds=row["duration_seconds"],
                 created_at=row["created_at"],
                 updated_at=row["updated_at"]
@@ -135,6 +150,7 @@ class DatabaseManager:
                     status = ?,
                     sorted_files = ?,
                     unsorted_files = ?,
+                    queued_files = 0,
                     duration_seconds = ?,
                     updated_at = ?
                 WHERE id = ?
@@ -150,14 +166,59 @@ class DatabaseManager:
                 INSERT INTO job_files (
                     job_id, original_path, file_name, doc_type,
                     owner, confidence, destination_path, status,
-                    is_unsorted, error_message, matched_keywords, created_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    is_unsorted, error_message, matched_keywords, stage, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, (
                 job_id, fc.original_path, fc.file_name, fc.doc_type,
                 fc.owner, fc.confidence, fc.destination_path, fc.status,
-                1 if fc.is_unsorted else 0, fc.error_message, keywords_json, now
+                1 if fc.is_unsorted else 0, fc.error_message, keywords_json,
+                fc.stage, now
             ))
             conn.commit()
+
+    def add_pending_file(self, job_id: str, fc: FileClassification) -> None:
+        """Insert a placeholder row for a file waiting on background OCR/AI."""
+        fc = fc.model_copy(update={
+            "doc_type": "Pending OCR",
+            "confidence": 0.0,
+            "status": "queued",
+            "is_unsorted": False,
+            "error_message": None,
+            "matched_keywords": [],
+            "stage": "ocr",
+        })
+        self.add_job_file(job_id, fc)
+
+    def update_job_file_result(self, job_id: str, fc: FileClassification) -> None:
+        import json
+        with self._get_connection() as conn:
+            conn.execute("""
+                UPDATE job_files SET
+                    doc_type = ?, owner = ?, confidence = ?,
+                    destination_path = ?, status = ?, is_unsorted = ?,
+                    error_message = ?, matched_keywords = ?, stage = ?
+                WHERE job_id = ? AND original_path = ?
+            """, (
+                fc.doc_type, fc.owner, fc.confidence,
+                fc.destination_path, fc.status, 1 if fc.is_unsorted else 0,
+                fc.error_message, json.dumps(fc.matched_keywords), fc.stage,
+                job_id, fc.original_path
+            ))
+            conn.commit()
+
+    def mark_job_file_processing(self, job_id: str, original_path: str, stage: str = "ocr") -> None:
+        with self._get_connection() as conn:
+            conn.execute("""
+                UPDATE job_files SET status = 'processing', stage = ?
+                WHERE job_id = ? AND original_path = ?
+            """, (stage, job_id, original_path))
+            conn.commit()
+
+    def get_job_file(self, job_id: str, original_path: str) -> Optional[FileClassification]:
+        for f in self.get_job_files(job_id):
+            if f.original_path == original_path:
+                return f
+        return None
 
     def get_job_files(self, job_id: str) -> List[FileClassification]:
         import json
@@ -179,9 +240,29 @@ class DatabaseManager:
                     status=r["status"],
                     is_unsorted=bool(r["is_unsorted"]),
                     error_message=r["error_message"],
-                    matched_keywords=kw
+                    matched_keywords=kw,
+                    stage=r["stage"]
                 ))
             return results
+
+    def recompute_job_counts(self, job_id: str) -> tuple[int, int, int]:
+        """Recompute (sorted, unsorted, queued) from job_files and persist them."""
+        now = datetime.now(timezone.utc).isoformat()
+        with self._get_connection() as conn:
+            row = conn.execute("""
+                SELECT
+                    COALESCE(SUM(CASE WHEN status = 'sorted' THEN 1 ELSE 0 END), 0) AS sorted_files,
+                    COALESCE(SUM(CASE WHEN status IN ('unsorted', 'error') THEN 1 ELSE 0 END), 0) AS unsorted_files,
+                    COALESCE(SUM(CASE WHEN status IN ('queued', 'processing') THEN 1 ELSE 0 END), 0) AS queued_files
+                FROM job_files WHERE job_id = ?
+            """, (job_id,)).fetchone()
+            counts = (row["sorted_files"], row["unsorted_files"], row["queued_files"])
+            conn.execute("""
+                UPDATE jobs SET sorted_files = ?, unsorted_files = ?, queued_files = ?, updated_at = ?
+                WHERE id = ?
+            """, (*counts, now, job_id))
+            conn.commit()
+        return counts
 
     def reclassify_file(
         self,
@@ -189,9 +270,9 @@ class DatabaseManager:
         original_path: str,
         new_doc_type: str,
         new_owner: str,
-        new_destination_path: str
+        new_destination_path: str,
+        stage: str = "manual"
     ) -> Optional[FileClassification]:
-        now = datetime.now(timezone.utc).isoformat()
         with self._get_connection() as conn:
             row = conn.execute(
                 "SELECT * FROM job_files WHERE job_id = ? AND original_path = ?",
@@ -200,30 +281,16 @@ class DatabaseManager:
             if not row:
                 return None
 
-            was_unsorted = bool(row["is_unsorted"])
-
             conn.execute("""
                 UPDATE job_files
-                SET doc_type = ?, owner = ?, destination_path = ?, status = 'sorted', is_unsorted = 0, confidence = 100.0
+                SET doc_type = ?, owner = ?, destination_path = ?, status = 'sorted',
+                    is_unsorted = 0, confidence = 100.0, stage = ?
                 WHERE job_id = ? AND original_path = ?
-            """, (new_doc_type, new_owner, new_destination_path, job_id, original_path))
-
-            if was_unsorted:
-                conn.execute("""
-                    UPDATE jobs
-                    SET sorted_files = sorted_files + 1,
-                        unsorted_files = MAX(0, unsorted_files - 1),
-                        updated_at = ?
-                    WHERE id = ?
-                """, (now, job_id))
-
+            """, (new_doc_type, new_owner, new_destination_path, stage, job_id, original_path))
             conn.commit()
 
-        files = self.get_job_files(job_id)
-        for f in files:
-            if f.original_path == original_path:
-                return f
-        return None
+        self.recompute_job_counts(job_id)
+        return self.get_job_file(job_id, original_path)
 
     def update_job_template(self, job_id: str, new_template: str) -> None:
         now = datetime.now(timezone.utc).isoformat()

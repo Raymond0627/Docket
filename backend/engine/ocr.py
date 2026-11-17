@@ -18,8 +18,26 @@ _ocr_engine = None
 def get_ocr_engine():
     global _ocr_engine
     if _ocr_engine is None:
+        from pathlib import Path
+        import os
         from rapidocr_onnxruntime import RapidOCR
-        _ocr_engine = RapidOCR()
+        try:
+            from backend.engine.ocr_worker import apply_onnx_thread_cap
+            import rapidocr_onnxruntime.utils as rutils
+            apply_onnx_thread_cap(rutils, 4)
+        except Exception:
+            pass
+        base = Path(__import__("rapidocr_onnxruntime").__file__).parent
+        # RapidOCR default uses limit_type='min', which UPScales small images
+        # to a 736px short side (100x300 -> 736x2208) and makes detection
+        # take ~10s. 'max' keeps the image at its natural size (capped by
+        # preprocess_image to 1024px), restoring original speed.
+        _ocr_engine = RapidOCR(
+            det_model_path=str(base / "models" / "ch_PP-OCRv3_det_infer.onnx"),
+            det_limit_side_len=736,
+            det_limit_type="max",
+            print_verbose=False,
+        )
     return _ocr_engine
 
 def preprocess_image(img: np.ndarray) -> np.ndarray:
@@ -102,6 +120,7 @@ import subprocess
 import sys
 import tempfile
 import threading
+import time
 from concurrent.futures import ThreadPoolExecutor
 
 _OCR_TIMEOUT = 480  # seconds per OCR request before the worker is killed
@@ -160,11 +179,14 @@ def _spawn_worker() -> "subprocess.Popen":
     )
 
 
-def _ocr_via_worker(op: str, path: Path) -> str:
+def _ocr_via_worker(op: str, path: Path, cancel_event=None) -> Optional[str]:
+    """Run one OCR request. Returns None when cancelled by a manual override."""
     pool = _get_pool()
     slot = pool.get()  # blocks only when every worker is busy
     try:
         for attempt in (1, 2):
+            if cancel_event is not None and cancel_event.is_set():
+                return None
             if slot.proc is None or slot.proc.poll() is not None:
                 slot.proc = _spawn_worker()
             worker = slot.proc
@@ -180,7 +202,18 @@ def _ocr_via_worker(op: str, path: Path) -> str:
 
                 t = threading.Thread(target=_read, daemon=True)
                 t.start()
-                t.join(_OCR_TIMEOUT)
+
+                deadline = time.monotonic() + _OCR_TIMEOUT
+                while t.is_alive():
+                    if cancel_event is not None and cancel_event.is_set():
+                        worker.kill()  # stop this file's OCR immediately
+                        slot.proc = None
+                        return None
+                    remaining = deadline - time.monotonic()
+                    if remaining <= 0:
+                        break
+                    t.join(min(0.2, remaining))
+
                 if t.is_alive():
                     worker.kill()  # ONNX deadlock detected
                     slot.proc = None
@@ -199,18 +232,23 @@ def _ocr_via_worker(op: str, path: Path) -> str:
         pool.put(slot)
 
 
-def extract_ocr_text(file_path: Path) -> str:
-    """Extracts text from image file via the OCR worker (watchdog-guarded)."""
-    return _ocr_via_worker("img", Path(file_path))
+def extract_ocr_text(file_path: Path, cancel_event=None) -> Optional[str]:
+    """Extracts text from image file via the OCR worker (watchdog-guarded).
+
+    Returns None if `cancel_event` was set (manual override / job cancelled).
+    """
+    return _ocr_via_worker("img", Path(file_path), cancel_event)
 
 
-def _render_pdf_pages(file_path: Path, max_pages: int) -> tuple[list, Path]:
+def _render_pdf_pages(file_path: Path, max_pages: int, cancel_event=None) -> tuple[list, Path]:
     """Renders PDF pages to temporary PNGs so each page can be OCRed in
     parallel by the worker pool. Returns (page_paths, temp_dir)."""
     tmp_dir = Path(tempfile.mkdtemp(prefix="docket_ocr_"))
     page_paths = []
     with fitz.open(str(file_path)) as doc:
         for page_idx in range(min(len(doc), max_pages)):
+            if cancel_event is not None and cancel_event.is_set():
+                break
             # Render at the configured OCR DPI (default 150)
             pix = doc[page_idx].get_pixmap(dpi=get_ocr_dpi())
             img = np.frombuffer(pix.samples, dtype=np.uint8).reshape(pix.height, pix.width, pix.n)
@@ -227,21 +265,33 @@ def _render_pdf_pages(file_path: Path, max_pages: int) -> tuple[list, Path]:
     return page_paths, tmp_dir
 
 
-def extract_pdf_ocr_text(file_path: Path, max_pages: int = 5) -> str:
+def extract_pdf_ocr_text(file_path: Path, max_pages: int = 5, cancel_event=None) -> Optional[str]:
     """Extracts text from a scanned PDF: render pages, then OCR them in
-    parallel across the worker pool (watchdog-guarded)."""
+    parallel across the worker pool (watchdog-guarded).
+
+    Returns None if `cancel_event` was set (manual override / job cancelled).
+    """
     try:
-        page_paths, tmp_dir = _render_pdf_pages(Path(file_path), max_pages)
+        page_paths, tmp_dir = _render_pdf_pages(Path(file_path), max_pages, cancel_event)
     except Exception:
         return ""
+    if cancel_event is not None and cancel_event.is_set():
+        shutil.rmtree(tmp_dir, ignore_errors=True)
+        return None
     if not page_paths:
+        shutil.rmtree(tmp_dir, ignore_errors=True)
         return ""
     try:
         if len(page_paths) == 1:
-            texts = [_ocr_via_worker("img", page_paths[0])]
+            texts = [_ocr_via_worker("img", page_paths[0], cancel_event)]
         else:
             with ThreadPoolExecutor(max_workers=len(page_paths)) as pool:
-                texts = list(pool.map(lambda p: _ocr_via_worker("img", p), page_paths))
+                texts = list(pool.map(
+                    lambda p: _ocr_via_worker("img", p, cancel_event),
+                    page_paths,
+                ))
+        if any(t is None for t in texts):
+            return None
         return "\n".join(t for t in texts if t)
     finally:
         shutil.rmtree(tmp_dir, ignore_errors=True)

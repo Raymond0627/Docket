@@ -134,7 +134,7 @@ def test_api_reorganize_output_structure(client, tmp_path):
     src.mkdir()
     out.mkdir()
 
-    # Create digital PDF
+    # Create PDF (processed through OCR)
     import fitz
     doc = fitz.open()
     page = doc.new_page()
@@ -168,3 +168,38 @@ def test_api_reorganize_output_structure(client, tmp_path):
     assert os.path.exists(f["destination_path"])
     assert "Driver License" in f["destination_path"] or "Driver's License" in f["destination_path"]
     assert "Raymond Gudito" in f["destination_path"]
+
+
+def test_api_analyze_file_with_ai(client, tmp_path, monkeypatch):
+    from backend.models import AppSettings
+
+    src = tmp_path / "src"
+    out = tmp_path / "out"
+    src.mkdir()
+    out.mkdir()
+    mystery = src / "mystery.txt"
+    mystery.write_text("unknown content", encoding="utf-8")
+
+    job_id = client.post("/api/jobs", json={
+        "source_path": str(src), "output_path": str(out),
+    }).json()["id"]
+    with client.stream("GET", f"/api/jobs/{job_id}/stream") as stream:
+        for _ in stream.iter_lines():
+            pass
+
+    monkeypatch.setattr(
+        "backend.api.jobs.load_settings",
+        lambda: AppSettings(gemini_api_key="dummy"),
+    )
+    monkeypatch.setattr(
+        "backend.api.jobs.classify_document_with_gemini",
+        lambda **kw: {"doc_type": "Invoice", "owner": "Test Owner", "confidence": 90},
+    )
+
+    res = client.post(f"/api/jobs/{job_id}/analyze", json={"original_path": str(mystery)})
+    assert res.status_code == 200
+    f = res.json()["file"]
+    assert f["doc_type"] == "Invoice"
+    assert f["status"] == "sorted"
+    assert f["stage"] == "ai"
+    assert "Test Owner" in f["destination_path"]
