@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import React, { useMemo, useCallback } from 'react';
 import { DirectoryNode, FileClassification, RuleDefinition } from '../types';
 import { Folder, FolderOpen, ChevronRight, ChevronDown, FileText, FileSpreadsheet, Image as ImageIcon, File } from 'lucide-react';
 
@@ -8,16 +8,24 @@ interface TreeViewProps {
   rules?: RuleDefinition[];
   hierarchyMode?: 'by_owner' | 'by_doc_type' | 'by_category' | 'raw_disk';
   onSelectFile?: (file: FileClassification) => void;
+  // Controlled expansion state (keyed by hierarchy mode) so open folders
+  // survive tab switches and backend refreshes.
+  expandedByMode?: Record<string, Set<string>>;
+  onToggleFolder?: (mode: string, path: string) => void;
 }
+
+// Shared empty set used when a hierarchy mode has no expanded folders yet.
+const EMPTY_EXPANDED: Set<string> = new Set();
 
 const TreeNode: React.FC<{
   node: DirectoryNode;
   level?: number;
+  isOpen: boolean;
+  isExpanded: (path: string) => boolean;
+  onToggle: (path: string) => void;
   filesMap?: Map<string, FileClassification>;
   onSelectFile?: (file: FileClassification) => void;
-}> = ({ node, level = 0, filesMap, onSelectFile }) => {
-  const [isOpen, setIsOpen] = useState(level < 2);
-
+}> = ({ node, level = 0, isOpen, isExpanded, onToggle, filesMap, onSelectFile }) => {
   const isDirectory = node.type === 'directory';
 
   const getFileIcon = (fileName: string) => {
@@ -30,7 +38,8 @@ const TreeNode: React.FC<{
 
   const handleRowClick = () => {
     if (isDirectory) {
-      setIsOpen(!isOpen);
+      // Root folder ("Docket Output") always stays open — ignore toggle.
+      if (level > 0) onToggle(node.path);
     } else if (onSelectFile && filesMap) {
       const match = filesMap.get(node.path) || filesMap.get(node.name);
       if (match) onSelectFile(match);
@@ -72,11 +81,14 @@ const TreeNode: React.FC<{
 
       {isDirectory && isOpen && node.children && (
         <div>
-          {node.children.map((child, idx) => (
+          {node.children.map((child) => (
             <TreeNode
-              key={idx}
+              key={child.path}
               node={child}
               level={level + 1}
+              isOpen={isExpanded(child.path)}
+              isExpanded={isExpanded}
+              onToggle={onToggle}
               filesMap={filesMap}
               onSelectFile={onSelectFile}
             />
@@ -93,7 +105,21 @@ export const TreeView: React.FC<TreeViewProps> = ({
   rules = [],
   hierarchyMode = 'by_owner',
   onSelectFile,
+  expandedByMode,
+  onToggleFolder,
 }) => {
+  // Expanded folder paths for the current hierarchy mode, controlled by the
+  // parent (ResultScreen) so folders you opened stay open across tab
+  // switches and backend refreshes. All subfolders start closed.
+  const expandedPaths = expandedByMode?.[hierarchyMode] ?? EMPTY_EXPANDED;
+
+  const togglePath = useCallback(
+    (path: string) => {
+      onToggleFolder?.(hierarchyMode, path);
+    },
+    [hierarchyMode, onToggleFolder]
+  );
+
   const filesMap = useMemo(() => {
     const map = new Map<string, FileClassification>();
     files.forEach((f) => {
@@ -301,6 +327,9 @@ export const TreeView: React.FC<TreeViewProps> = ({
       <TreeNode
         node={dynamicTree}
         level={0}
+        isOpen
+        isExpanded={(path) => expandedPaths.has(path)}
+        onToggle={togglePath}
         filesMap={filesMap}
         onSelectFile={onSelectFile}
       />

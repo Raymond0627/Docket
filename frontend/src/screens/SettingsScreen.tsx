@@ -176,10 +176,12 @@ export const SettingsScreen: React.FC = () => {
           <div>
             <label className="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-2">File Action Mode</label>
             <div className="grid grid-cols-2 gap-3">
-              <button
-                type="button"
+              <div
+                role="button"
+                tabIndex={0}
                 onClick={() => setSettings({ ...settings, file_mode: 'copy' })}
-                className={`flex items-center gap-2 p-3 rounded-xl border text-xs font-medium transition ${
+                onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') setSettings({ ...settings, file_mode: 'copy' }); }}
+                className={`flex items-center gap-2 p-3 rounded-xl border text-xs font-medium transition cursor-pointer ${
                   settings.file_mode === 'copy'
                     ? 'border-brand-500 bg-brand-50 dark:bg-brand-500/10 text-brand-700 dark:text-white ring-1 ring-brand-500/30'
                     : 'border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-800/60 text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'
@@ -189,8 +191,22 @@ export const SettingsScreen: React.FC = () => {
                 <div className="text-left">
                   <div className="font-semibold">Copy (Safe)</div>
                   <div className="text-[11px] text-slate-500 dark:text-slate-400">Leaves source untouched</div>
+                  <label
+                    className="mt-1.5 flex items-center gap-1.5 cursor-pointer select-none"
+                    onClick={(e) => e.stopPropagation()}
+                  >
+                    <input
+                      type="checkbox"
+                      checked={!!settings.allow_duplicates}
+                      onChange={(e) => setSettings({ ...settings, allow_duplicates: e.target.checked })}
+                      className="h-3.5 w-3.5 rounded border-slate-300 dark:border-slate-600 text-brand-500 accent-brand-500 focus:ring-brand-500 cursor-pointer"
+                    />
+                    <span className="text-[11px] font-normal text-slate-500 dark:text-slate-400">
+                      Allow duplicates
+                    </span>
+                  </label>
                 </div>
-              </button>
+              </div>
 
               <button
                 type="button"
@@ -318,7 +334,7 @@ export const SettingsScreen: React.FC = () => {
             </div>
             <div>
               <h3 className="font-bold text-sm text-slate-900 dark:text-white flex items-center gap-2">
-                <span>Google Gemini AI (Chat with Selected Documents)</span>
+                <span>Lumeed AI</span>
                 <span className="rounded-full bg-indigo-500/10 px-2 py-0.5 text-[10px] font-semibold text-indigo-600 dark:text-indigo-400 ring-1 ring-indigo-500/20">
                   Multimodal Q&A
                 </span>

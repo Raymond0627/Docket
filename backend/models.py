@@ -25,6 +25,9 @@ class ValidatedCustomer(BaseModel):
 class AppSettings(BaseModel):
     output_path: str = "./Docket_Output"
     file_mode: str = "copy"  # "copy" or "move"
+    # When False (default), routing replaces any existing file with the same
+    # name (including _1, _2 ... variants) instead of appending duplicates.
+    allow_duplicates: bool = False
     confidence_threshold: float = 70.0
     folder_template: str = "{owner}/"
     auto_open_explorer: bool = False

@@ -37,7 +37,7 @@ def test_gemini_connection(api_key: str, model_name: str = DEFAULT_MODEL) -> Dic
     res = requests.post(url, headers=headers, json=payload, timeout=20)
     if res.status_code == 200:
         return {"success": True, "model": model_name, "message": "Google Gemini connected successfully!"}
-    
+
     # Try fallback model if model was not found
     if res.status_code == 404:
         for fallback in ["gemini-3.6-flash", "gemini-3.5-flash-lite"]:
@@ -124,7 +124,7 @@ def chat_with_gemini(
         parts.append({"text": history_text})
 
     instruction = (
-        "You are an intelligent document assistant in Docket Local. "
+        "You are Lumeed AI, an intelligent document assistant in Docket Local. "
         "The user is asking questions about the attached document image or file. "
         "Answer the user's question clearly, concisely, and accurately based on the document.\n\n"
         f"User Question: {prompt}"
@@ -200,7 +200,7 @@ def classify_document_with_gemini(
         # OCR text helps when the file is a low-quality scan.
         parts.append({"text": f"Extracted/OCR text (may contain errors):\n{text.strip()[:6000]}"})
     parts.append({"text": (
-        "You are the final automatic classification layer of Docket Local.\n"
+        "You are Lumeed AI, the final automatic classification layer. "
         "Classify the attached document into exactly ONE of these document types:\n"
         f"{rule_lines}\n\n"
         'Use "Unsorted" if none of the types clearly match.\n'

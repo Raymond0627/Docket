@@ -19,6 +19,7 @@ export interface ValidatedCustomer {
 export interface AppSettings {
   output_path: string;
   file_mode: 'copy' | 'move';
+  allow_duplicates?: boolean;
   confidence_threshold: number;
   folder_template: string;
   auto_open_explorer: boolean;

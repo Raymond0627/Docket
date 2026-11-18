@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useRef, useState, useCallback } from 'react';
 import { Job, DirectoryNode, FileClassification, RuleDefinition } from '../types';
 import { api } from '../services/api';
 import { TreeView } from '../components/TreeView';
@@ -35,12 +35,28 @@ export const ResultScreen: React.FC<ResultScreenProps> = ({ job, onReset }) => {
   const [activeTab, setActiveTab] = useState<'files' | 'tree'>('files');
   const [filterMode, setFilterMode] = useState<'all' | 'processing' | 'unsorted' | 'sorted'>('all');
   const [sortField, setSortField] = useState<'owner' | 'doc_type'>('owner');
-  const [hierarchyMode, setHierarchyMode] = useState<'by_owner' | 'by_doc_type' | 'by_category' | 'raw_disk'>('by_owner');
+  const [hierarchyMode, setHierarchyMode] = useState<'by_doc_type' | 'by_owner' | 'by_category' | 'raw_disk'>('by_doc_type');
   const [selectedFileForViewer, setSelectedFileForViewer] = useState<FileClassification | null>(null);
   const [isECMSOpen, setIsECMSOpen] = useState(false);
   const [openingFolder, setOpeningFolder] = useState(false);
   const [reorganizingDisk, setReorganizingDisk] = useState(false);
   const lastTreeRefreshRef = useRef(0);
+  // Expanded tree folders, keyed by hierarchy mode, so folders the user
+  // opened stay open across tab switches and backend refreshes.
+  const [expandedByMode, setExpandedByMode] = useState<Record<string, Set<string>>>({});
+
+  const handleToggleFolder = useCallback((mode: string, path: string) => {
+    setExpandedByMode((prev) => {
+      const current = prev[mode];
+      const next = current ? new Set(current) : new Set<string>();
+      if (next.has(path)) {
+        next.delete(path);
+      } else {
+        next.add(path);
+      }
+      return { ...prev, [mode]: next };
+    });
+  }, []);
 
   useEffect(() => {
     setCurrentJob(job);
@@ -449,6 +465,8 @@ export const ResultScreen: React.FC<ResultScreenProps> = ({ job, onReset }) => {
             files={files}
             rules={rules}
             hierarchyMode={hierarchyMode}
+            expandedByMode={expandedByMode}
+            onToggleFolder={handleToggleFolder}
             onSelectFile={(f) => setSelectedFileForViewer(f)}
           />
         ) : (
